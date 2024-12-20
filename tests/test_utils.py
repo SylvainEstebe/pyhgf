@@ -6,7 +6,7 @@ from pytest import raises
 from pyhgf import load_data
 from pyhgf.model import Network
 from pyhgf.typing import AdjacencyLists
-from pyhgf.utils import list_branches, remove_node
+from pyhgf.utils import add_parent, list_branches, remove_node
 
 
 def test_imports():
@@ -94,9 +94,28 @@ def test_set_update_sequence():
     assert len(updates) == 3
 
 
+def test_add_parent():
+    """Test the add_parent function."""
+    network = (
+        Network()
+        .add_nodes(n_nodes=4)
+        .add_nodes(value_children=2)
+        .add_nodes(value_children=3)
+    )
+    attributes, edges, _ = network.get_network()
+    new_attributes, new_edges = add_parent(attributes, edges, 1, "volatility", 1.0)
+
+    assert len(new_attributes) == 8
+    assert len(new_edges) == 7
+
+    new_attributes, new_edges = add_parent(attributes, edges, 1, "value", 1.0)
+
+    assert len(new_attributes) == 8
+    assert len(new_edges) == 7
+
+
 def test_remove_node():
     """Test the remove_node function."""
-    # a standard binary HGF
     network = (
         Network()
         .add_nodes(n_nodes=4)
