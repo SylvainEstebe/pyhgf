@@ -238,6 +238,7 @@ Utilities for manipulating neural networks.
    to_pandas
    add_edges
    get_input_idxs
+   remove_node
 
 Math
 ****
