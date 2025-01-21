@@ -1,13 +1,59 @@
 from functools import partial
 from typing import Dict, Tuple
 
-import jax
 import jax.numpy as jnp
 from jax import jit, lax, random
 from jax.typing import ArrayLike
 
 from pyhgf.typing import Attributes, Edges, UpdateSequence
 from pyhgf.updates.observation import set_observation
+
+
+def sample_node_distribution(
+    attributes: Dict[int, dict],
+    node_idx: int,
+    rng_key: random.PRNGKey,
+    model_type: int,
+) -> Tuple[float, random.PRNGKey]:
+    """Sample a value from the distribution of the specified node.
+
+    Parameters
+    ----------
+    attributes : Dict[int, dict]
+        The dictionary of node parameters, keyed by node index.
+    node_idx : int
+        The index of the child nodes whose distribution is to be sampled.
+    rng_key : random.PRNGKey
+        A PRNG key for random number generation.
+    model_type : int
+        Specifies the distribution type (e.g., discrete=1, continuous=2).
+
+    Returns
+    -------
+    sample : float
+        The sampled value from the node's distribution.
+    rng_key : random.PRNGKey
+        Updated PRNG key.
+
+    """
+    # Fetch parameters from attributes
+    node_attr = attributes[node_idx]
+    mu = node_attr.get("expected_mean", None)
+    precision = node_attr.get("expected_precision", None)
+
+    sigma = 1.0 / jnp.sqrt(precision)
+
+    # Split RNG key
+    rng_key, subkey = random.split(rng_key)
+
+    # Sample conditionally based on model type
+    sample = lax.cond(
+        model_type == 2,
+        lambda _: random.normal(subkey) * sigma + mu,  # Continuous distribution
+        lambda _: jnp.float32(random.bernoulli(subkey)),  # Discrete (Bernoulli)
+        operand=None,
+    )
+    return sample, rng_key
 
 
 def scan_sampling(
@@ -41,62 +87,14 @@ def scan_sampling(
     """
 
     def scan_fn(carry, _):
-        rng_key = carry
-        sample, new_rng_key = sample_node_distribution(
-            attributes, node_idx, rng_key, model_type
+        rng_key_in = carry
+        sample, rng_key_out = sample_node_distribution(
+            attributes, node_idx, rng_key_in, model_type
         )
-        return new_rng_key, sample
+        return rng_key_out, sample
 
-    rng_key, samples = jax.lax.scan(scan_fn, rng_key, None, length=num_samples)
+    _, samples = lax.scan(scan_fn, rng_key, None, length=num_samples)
     return samples
-
-
-def sample_node_distribution(
-    attributes: Dict[int, dict],
-    node_idx: int,
-    rng_key: random.PRNGKey,
-    model_type: int,
-) -> Tuple[float, random.PRNGKey]:
-    """Sample a value from the distribution of the specified node.
-
-    Parameters
-    ----------
-    attributes : Dict[int, dict]
-        The dictionary of node parameters, keyed by node index.
-    node_idx : int
-        The index of the node whose distribution is to be sampled.
-    rng_key : random.PRNGKey
-        A PRNG key for random number generation.
-    model_type : int
-        Specifies the distribution type (e.g., discrete: 1, continuous: 2).
-
-    Returns
-    -------
-    sample : float
-        The sampled value from the node's distribution.
-    rng_key : random.PRNGKey
-        Updated PRNG key.
-
-    """
-    node_attr = attributes.get(node_idx, {})
-    mu = node_attr.get("expected_mean", 0.0)
-    precision = node_attr.get("expected_precision", 1.0)
-
-    # Ensure precision is positive
-    precision = jnp.where(precision > 0, precision, 1e-12)
-    sigma = 1.0 / jnp.sqrt(precision)
-
-    rng_key, subkey = random.split(rng_key)
-    p = jnp.clip(mu, 0.0, 1.0)
-
-    # Sample based on model type
-    sample = jnp.where(
-        model_type == 2,  # continuous
-        random.normal(subkey) * sigma + mu,
-        random.bernoulli(subkey, p),  # discrete
-    )
-
-    return sample, rng_key
 
 
 def handle_observation(
@@ -111,118 +109,108 @@ def handle_observation(
     Parameters
     ----------
     attributes : Attributes
-        The dictionaries of nodes' parameters.
+        The dictionary of node parameters.
     node_idx : int
-        Index of the node to handle.
+        The index of the node being observed.
     rng_key : random.PRNGKey
         Random number generator key.
     sophisticated : bool
-        Determines whether to use sophisticated sampling or default.
+        Whether to use sophisticated sampling.
     edges : Edges
-        Information on the network's edges.
+        Network edges containing node type and connections.
 
     Returns
     -------
     updated_attributes : Attributes
-        Updated attributes after observation.
+        Updated attributes dictionary.
     rng_key : random.PRNGKey
         Updated RNG key.
 
     """
 
-    def sophisticated_branch(_):
-        sampled_value, new_rng_key = sample_node_distribution(
+    def sophisticated_mode(_):
+        sampled_value, rng_key_new = sample_node_distribution(
             attributes, node_idx, rng_key, edges[node_idx].node_type
         )
-        return sampled_value, 1, new_rng_key
+        return sampled_value, 1, rng_key_new
 
-    def non_sophisticated_branch(_):
+    def non_sophisticated_mode(_):
         return jnp.nan, 0, rng_key
 
-    # Use lax.cond to branch on sophisticated or not
-    sampled_value, observed, rng_key = lax.cond(
-        sophisticated,
-        sophisticated_branch,
-        non_sophisticated_branch,
-        operand=None,
-    )
+    if sophisticated:
+        sampled_value, observed, rng_key_out = sophisticated_mode(None)
+    else:
+        sampled_value, observed, rng_key_out = non_sophisticated_mode(None)
 
-    # Assign observation to the node
     updated_attributes = set_observation(
         attributes=attributes,
         node_idx=node_idx,
         values=sampled_value,
         observed=observed,
     )
-    return updated_attributes, rng_key
+
+    return updated_attributes, rng_key_out
 
 
-@partial(jit, static_argnames=("update_sequence", "edges", "input_idxs"))
+@partial(
+    jit, static_argnames=("update_sequence", "edges", "input_idxs", "sophisticated")
+)
 def inference_prediction(
     attributes: Attributes,
     inputs: Tuple[ArrayLike, ...],
     update_sequence: UpdateSequence,
     edges: Edges,
     input_idxs: Tuple[int],
-    sophisticated: bool = True,
-    rng_seed: int = 42,
-) -> Tuple[Dict, Dict]:
-    """Perform inference and prediction steps in a network.
-
-    This function updates the network's parameters based on new observations and a
-    specified update sequence. It integrates prediction, observation handling,
-    and update steps in three main stages:
+    sophisticated: bool,
+    rng_key: random.PRNGKey,
+) -> Tuple[Dict, Dict, random.PRNGKey]:
+    """Perform prediction steps with his own distribution of child node.
 
     Parameters
     ----------
     attributes : Attributes
-        The dictionaries of nodes' parameters. This variable is updated and returned
-        after the inference and prediction steps.
-    inputs : tuple of ArrayLike
-        A tuple of arrays containing the new observation(s), the time steps, and
-        additional input data.
+        The dictionary of node parameters.
+    inputs : Tuple[ArrayLike, ...]
+        Input data (e.g., time step or observations).
     update_sequence : UpdateSequence
-        The sequence of updates that will be applied to the node structure.
-        Typically, this is a tuple of two lists:
-          ([(node_idx, update_fn), ...],  # prediction steps
-           [(node_idx, update_fn), ...])  # update steps
+        Two lists: (prediction_steps, update_steps).
     edges : Edges
-        Information on the network's edges, which may be used by update functions.
-    input_idxs : tuple of int
-        List of input node indexes that will receive new observations.
-    sophisticated : bool, optional
-        Determines whether to use sophisticated sampling during observations
-        (default: True).
-    rng_seed : int, optional
-        Seed for the random number generator (default: 42).
+        Network edges containing node types and connections.
+    input_idxs : Tuple[int]
+        Indices of nodes receiving observations at this time step.
+    sophisticated : bool
+        Whether to sample observations from his own node or not.
+    rng_key : random.PRNGKey
+        Random number generator key to be used for sampling.
 
     Returns
     -------
-    attributes, attributes : tuple of Dict
-        A tuple of parameter structures after the prediction and inference cycles
-        have completed. Both entries are the same here (carryover vs. accumulated
-        structures) but can be differentiated if needed in future extensions.
+    updated_attributes : Dict
+        The attributes after all prediction, observation, and update steps.
+    duplicated_attributes : Dict
+        A duplicate of updated attributes (as required by your interface).
+    rng_key : random.PRNGKey
+        Updated RNG key after sampling.
 
     """
-    rng_key = random.PRNGKey(rng_seed)
+    # Use the passed rng_key without reinitializing it.
     prediction_steps, update_steps = update_sequence
 
-    time_step = inputs
-    attributes[-1]["time_step"] = time_step
+    # Assign time_step (e.g. input data) to a special key in attributes.
+    attributes[-1]["time_step"] = inputs
 
-    # Prediction Sequence
+    # Run prediction steps.
     for node_idx, update_fn in prediction_steps:
         attributes = update_fn(attributes=attributes, node_idx=node_idx, edges=edges)
 
-    # Observations
+    # Handle observations on specified input nodes.
     for node_idx in input_idxs:
         attributes, rng_key = handle_observation(
             attributes, node_idx, rng_key, sophisticated, edges
         )
 
-    # Update Sequence
+    # Run update steps.
     for node_idx, update_fn in update_steps:
         attributes = update_fn(attributes=attributes, node_idx=node_idx, edges=edges)
 
-    # Return updated attributes
-    return attributes, attributes
+    return attributes, attributes, rng_key

@@ -2,9 +2,12 @@
 
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import jax
 import jax.numpy as jnp
+import jax.random as random
 import numpy as np
 import pandas as pd
+from jax import lax
 from jax.lax import scan, switch
 from jax.tree_util import Partial
 from jax.typing import ArrayLike
@@ -92,15 +95,9 @@ class Network:
         Parameters
         ----------
         overwrite : bool, optional
-            If ``True`` (default), create a new belief propagation function and ignore
-            preexisting values. Otherwise, do not create a new function if the attribute
-            ``scan_fn`` is already defined.
+            A flag indicating whether to overwrite
         update_type : str, optional
-            The type of update to perform for volatility coupling. Can be ``"eHGF"``
-            (default) or ``"standard"``. The eHGF update step was proposed as an
-            alternative to the original definition in that it starts by updating the
-            mean and then the precision of the parent node, which generally reduces
-            the errors associated with impossible parameter space and improves sampling.
+            A string that specifies the type of update sequence
 
         Returns
         -------
@@ -134,106 +131,105 @@ class Network:
     def create_inference_fn(
         self, overwrite: bool = True, update_type: str = "eHGF"
     ) -> "Network":
-        """Create the prediction function (``scan_fn``).
+        """Create or update the inference function.
 
         Parameters
         ----------
         overwrite : bool, optional
-            If ``True`` (default), create a new belief propagation function and ignore
-            any preexisting values. If ``False``, a new function is not created if
-            ``scan_fn`` is already defined.
+            If True, an existing scan function (if any) is overwritten.
         update_type : str, optional
-            The type of update to perform for volatility coupling. Can be ``"eHGF"``
-            (default) or ``"standard"``. The eHGF update step starts by updating
-            the mean and then the precision of the parent node, which can reduce
-            parameter-space errors and improve sampling stability.
+            The type of update sequence to generate (e.g., "eHGF").
 
         Returns
         -------
         Network
-            Returns the current instance of the network with the (potentially new)
-            ``scan_fn`` attribute defined, allowing for method chaining.
+            The current network object with an updated or newly created scan function.
 
         """
-        # Ensure that an update sequence exists; if not, create one.
+        # Check if the update sequence exists; if not, generate one using a helper.
         if self.update_sequence is None:
             self.update_sequence = get_update_sequence(
                 network=self, update_type=update_type
             )
 
-        # Create or overwrite the belief propagation function (scan_fn).
-        # This function will be used by lax.scan (or a similar mechanism) to loop
-        # over observations.
+        # Create or overwrite the belief propagation (scan) function.
+        # This function will be used later during the prediction phase.
         if (self.scan_fn is None) or overwrite:
             self.scan_fn = Partial(
                 inference_prediction,
                 update_sequence=self.update_sequence,
                 edges=self.edges,
                 input_idxs=self.input_idxs,
-                sophisticated=True,
+                sophisticated=True,  # Enable sophisticated mode by default.
             )
-
         return self
 
     def input_data_prediction(
         self,
         time_steps: Optional[np.ndarray] = None,
         input_idxs: Optional[Tuple[int]] = None,
+        rng_key: Optional[random.PRNGKey] = None,
     ) -> "Network":
-        """Add new observations to the model and perform predictions over time.
-
-        This method sets up default or user-defined time steps, optionally updates
-        which nodes receive observations, and then applies the scanning mechanism
-        (via ``scan_fn``) to perform belief updates across these time steps.
-        If no scanning function is defined, it is created by calling
-        :meth:`create_inference_fn`.
+        """Run the prediction process over a sequence of time steps.
 
         Parameters
         ----------
-        time_steps : np.ndarray, optional
-            An array specifying the time points at which observations occur.
-            If ``None`` (default), it defaults to ``np.ones(100)``.
-        input_idxs : tuple of int, optional
-            The indexes of the state nodes that receive observations. If not
-            provided, the existing values for ``self.input_idxs`` are used.
-
+        time_steps : Optional[np.ndarray], optional
+            An array of time-step values
+        input_idxs : Optional[Tuple[int]], optional
+            A tuple containing the indices of input nodes
+        rng_key : Optional[random.PRNGKey], optional
+            A JAX PRNG key for random number generation
         Returns
         -------
         Network
-            Returns the current instance of the network with updated
-            ``last_attributes`` and ``node_trajectories`` for method chaining.
-
-        Notes
-        -----
-        - The arrays ``dummy_values`` and ``dummy_observed`` are placeholders for
-          demonstration. In practice, you should replace them with real observed
-          data and indicators of whether each observation is valid or missing.
-        - The scanning process, driven by ``self.scan_fn``, traverses each time step
-          to update the network's node attributes based on the specified
-          inference algorithm, effectively performing precision-weighted
-          prediction-error corrections.
+            The network object
 
         """
-        # If input node indexes are provided, set them
+        # Update input indices if provided.
         if input_idxs is not None:
             self.input_idxs = input_idxs
 
-        # If a scan function hasn't been created, initialize it
+        # If the scan function isn't defined, create it using `create_inference_fn`.
         if self.scan_fn is None:
             self = self.create_inference_fn()
 
-        # Use default time steps if none are provided
+        # Set default time_steps if not provided.
+        # Here, an array of 100 ones is used as a placeholder for time steps.
         if time_steps is None:
             time_steps = np.ones(100)
 
-        # Perform the scanning operation over the time steps
-        last_attributes, node_trajectories = scan(
-            self.scan_fn, self.attributes, time_steps
+        # Initialize the RNG key if one is not provided.
+        if rng_key is None:
+            rng_key = jax.random.PRNGKey(0)
+
+        # Define a wrapper function to adapt our scan function for use with
+        # JAX's `lax.scan`. The wrapper handles the carry (attributes and RNG key)
+        # and updates them at each iteration based on the time step's input.
+        def scan_wrapper(carry, inputs):
+            attributes, rng_key = carry
+            # Call the pre-bound scan function.
+            # Expected to return new attributes, a duplicate of updated attributes
+            # (for trajectory), and an updated RNG key.
+            new_attributes, updated_attributes, rng_key = self.scan_fn(
+                attributes, inputs, rng_key=rng_key
+            )
+            # Return the new carry (new attributes and RNG key) and the output
+            # for this time step.
+            return (new_attributes, rng_key), updated_attributes
+
+        # Use JAX's `lax.scan` to iteratively apply `scan_wrapper` over the time_steps.
+        # This returns:
+        #   - (final_attributes, final_rng_key): the final state after all iterations.
+        #   - node_trajectories: the collection of outputs (updated attributes)
+        #     for each time step.
+        (final_attributes, _), node_trajectories = lax.scan(
+            scan_wrapper, (self.attributes, rng_key), time_steps
         )
 
-        # Store the final attributes and full trajectory of node updates
+        # Store the results for later use or inspection.
         self.node_trajectories = node_trajectories
-        self.last_attributes = last_attributes
+        self.last_attributes = final_attributes
 
         return self
 
