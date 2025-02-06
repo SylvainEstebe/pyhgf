@@ -2,7 +2,8 @@
 
 from typing import TYPE_CHECKING
 
-import jax.numpy as np
+import jax.numpy as jnp
+import numpy as np
 import pandas as pd
 
 from pyhgf.math import binary_surprise, gaussian_surprise
@@ -24,7 +25,7 @@ def flatten_with_trajectory(x):
     tuple
 
     """
-    x_arr = np.asarray(x)
+    x_arr = jnp.asarray(x)
     if x_arr.ndim >= 2:
         n_traj, n_steps = x_arr.shape[:2]
         flat = x_arr.reshape(
@@ -52,7 +53,7 @@ def to_pandas(network: "Network") -> pd.DataFrame:
     # --- Process time steps and time ---
     # Assume time_step is stored in the last input node.
     ts = network.node_trajectories[-1]["time_step"]
-    ts_arr = np.asarray(ts)
+    ts_arr = jnp.asarray(ts)
     if ts_arr.ndim < 2:
         # If there is no trajectory dimension, assume a single trajectory.
         time_steps_flat = np.array(ts_arr)
@@ -61,8 +62,8 @@ def to_pandas(network: "Network") -> pd.DataFrame:
     else:
         # Compute cumulative sum separately for each trajectory
         n_traj, n_steps = ts_arr.shape
-        time_list = [np.cumsum(ts_arr[i]) for i in range(n_traj)]
-        time_arr = np.concatenate(time_list, axis=0)
+        time_list = [jnp.cumsum(ts_arr[i]) for i in range(n_traj)]
+        time_arr = jnp.concatenate(time_list, axis=0)
         time_steps_flat = ts_arr.reshape(-1)
         trajectory_ids = np.repeat(np.arange(n_traj), n_steps)
         time_flat = np.array(time_arr)
@@ -82,7 +83,7 @@ def to_pandas(network: "Network") -> pd.DataFrame:
     for i in states_indexes:
         for var, data in network.node_trajectories[i].items():
             if ("mean" in var) or ("precision" in var):
-                data_arr = np.asarray(data)
+                data_arr = jnp.asarray(data)
                 if data_arr.ndim >= 2:
                     flat, _ = flatten_with_trajectory(data_arr)
                     col_name = f"x_{i}_{var}"
@@ -98,7 +99,7 @@ def to_pandas(network: "Network") -> pd.DataFrame:
     for i in ef_indexes:
         for var in ["nus", "xis", "mean"]:
             data = network.node_trajectories[i][var]
-            data_arr = np.asarray(data)
+            data_arr = jnp.asarray(data)
             if data_arr.ndim >= 2:
                 flat, _ = flatten_with_trajectory(data_arr)
                 col_name = f"x_{i}_{var}"
@@ -114,7 +115,7 @@ def to_pandas(network: "Network") -> pd.DataFrame:
             x=network.node_trajectories[bin_idx]["mean"],
             expected_mean=network.node_trajectories[bin_idx]["expected_mean"],
         )
-        surp_arr = np.asarray(surprise)
+        surp_arr = jnp.asarray(surprise)
         if surp_arr.ndim >= 2:
             flat, _ = flatten_with_trajectory(surp_arr)
             trajectories_df[f"x_{bin_idx}_surprise"] = np.array(flat)
@@ -129,7 +130,7 @@ def to_pandas(network: "Network") -> pd.DataFrame:
             expected_mean=network.node_trajectories[con_idx]["expected_mean"],
             expected_precision=network.node_trajectories[con_idx]["expected_precision"],
         )
-        surp_arr = np.asarray(surprise)
+        surp_arr = jnp.asarray(surprise)
         if surp_arr.ndim >= 2:
             flat, _ = flatten_with_trajectory(surp_arr)
             trajectories_df[f"x_{con_idx}_surprise"] = np.array(flat)

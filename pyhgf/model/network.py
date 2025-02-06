@@ -1,6 +1,5 @@
 # Author: Nicolas Legrand <nicolas.legrand@cas.au.dk>
 
-import copy
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import jax
@@ -171,14 +170,14 @@ class Network:
         input_idxs: Optional[Tuple[int]] = None,
         rng_key: Optional[jax.random.PRNGKey] = None,
     ) -> "Network":
-        """Run the inference process over a sequence of time steps.
+        """Run the inference process over a sequence of time steps for n_trajectories.
 
         Parameters
         ----------
         n_trajectories : int
             The number of trajectories (predictions) to perform.
         time_steps : Optional[np.ndarray], optional
-            An array of time step values. Defaults to 100 ones.
+            An array of time step values.
         input_idxs : Optional[Tuple[int]], optional
             A tuple containing the indices of input nodes.
         rng_key : Optional[jax.random.PRNGKey], optional
@@ -187,60 +186,58 @@ class Network:
         Returns
         -------
         Network
-            A new network object with computed trajectories.
+            The updated network object with computed trajectories.
 
         """
-        # Create a copy to maintain a functional approach
-        new_self = copy.deepcopy(self)
-
-        # Update input indices if provided
+        # Update input indices if provided.
         if input_idxs is not None:
-            new_self.input_idxs = input_idxs
+            self.input_idxs = input_idxs
 
-        # Ensure the scan function is defined
-        if new_self.scan_fn is None:
-            new_self.create_inference_fn()  # Ensure it modifies self properly
+        # If the scan function is not yet defined, create it.
+        if self.scan_fn is None:
+            self = self.create_inference_fn()
 
-        # Set default values if not provided
-        time_steps = (
-            jnp.asarray(time_steps) if time_steps is not None else jnp.ones(100)
-        )
-        rng_key = rng_key if rng_key is not None else jax.random.PRNGKey(0)
+        # If no time_steps are provided, use a default array.
+        if time_steps is None:
+            time_steps = np.ones(100)
 
-        # Function to execute a single trajectory
+        # Initialize the RNG key if necessary.
+        if rng_key is None:
+            rng_key = jax.random.PRNGKey(0)
+
+        # Define the function to execute a single trajectory.
         def run_single_trajectory(rng_key, attributes):
-            """Execute a single trajectory using lax.scan."""
-
+            # Wrapper function used within lax.scan.
             def scan_wrapper(carry, inputs):
+                # carry contains attributes and the RNG key.
                 attr, key = carry
-                new_attr, updated_attr, key = new_self.scan_fn(
-                    attr, inputs, rng_key=key
-                )
+                # Call the network's inference function (scan_fn).
+                new_attr, updated_attr, key = self.scan_fn(attr, inputs, rng_key=key)
                 return (new_attr, key), updated_attr
 
+            # Execute the scan over all time_steps.
             return lax.scan(scan_wrapper, (attributes, rng_key), time_steps)
 
-        # Clone attributes to add batch dimension
+        # Clone  self.attributes so it has a batch dimension
         batched_attributes = jax.tree_util.tree_map(
             lambda x: jnp.broadcast_to(
-                jnp.array(x, dtype=jnp.float32), (n_trajectories,) + jnp.shape(x)
+                jnp.asarray(x), (n_trajectories,) + jnp.asarray(x).shape
             ),
-            new_self.attributes,
+            self.attributes,
         )
-
-        # Create separate RNG keys for each trajectory
+        # Create n_trajectories different RNG keys.
         rng_keys = jax.random.split(rng_key, n_trajectories)
 
-        # Apply run_single_trajectory using vmap
+        # Use vmap to apply run_single_trajectory to each trajectory.
         (final_attributes, _), node_trajectories = jax.vmap(run_single_trajectory)(
             rng_keys, batched_attributes
         )
 
-        # Store results in the new object
-        new_self.node_trajectories = node_trajectories
-        new_self.last_attributes = final_attributes
+        # Store the results in the self object.
+        self.node_trajectories = node_trajectories
+        self.last_attributes = final_attributes
 
-        return new_self
+        return self
 
     def input_data(
         self,
