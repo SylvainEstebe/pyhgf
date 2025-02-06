@@ -1,10 +1,10 @@
 # Author: Nicolas Legrand <nicolas.legrand@cas.au.dk>
 
+import copy
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import jax
 import jax.numpy as jnp
-import jax.random as random
 import numpy as np
 import pandas as pd
 from jax import lax
@@ -166,72 +166,81 @@ class Network:
 
     def input_data_prediction(
         self,
+        n_trajectories: int,
         time_steps: Optional[np.ndarray] = None,
         input_idxs: Optional[Tuple[int]] = None,
-        rng_key: Optional[random.PRNGKey] = None,
+        rng_key: Optional[jax.random.PRNGKey] = None,
     ) -> "Network":
-        """Run the prediction process over a sequence of time steps.
+        """Run the inference process over a sequence of time steps.
 
         Parameters
         ----------
+        n_trajectories : int
+            The number of trajectories (predictions) to perform.
         time_steps : Optional[np.ndarray], optional
-            An array of time-step values
+            An array of time step values. Defaults to 100 ones.
         input_idxs : Optional[Tuple[int]], optional
-            A tuple containing the indices of input nodes
-        rng_key : Optional[random.PRNGKey], optional
-            A JAX PRNG key for random number generation
+            A tuple containing the indices of input nodes.
+        rng_key : Optional[jax.random.PRNGKey], optional
+            A JAX PRNG key for random number generation.
+
         Returns
         -------
         Network
-            The network object
+            A new network object with computed trajectories.
 
         """
-        # Update input indices if provided.
+        # Create a copy to maintain a functional approach
+        new_self = copy.deepcopy(self)
+
+        # Update input indices if provided
         if input_idxs is not None:
-            self.input_idxs = input_idxs
+            new_self.input_idxs = input_idxs
 
-        # If the scan function isn't defined, create it using `create_inference_fn`.
-        if self.scan_fn is None:
-            self = self.create_inference_fn()
+        # Ensure the scan function is defined
+        if new_self.scan_fn is None:
+            new_self.create_inference_fn()  # Ensure it modifies self properly
 
-        # Set default time_steps if not provided.
-        # Here, an array of 100 ones is used as a placeholder for time steps.
-        if time_steps is None:
-            time_steps = np.ones(100)
+        # Set default values if not provided
+        time_steps = (
+            jnp.asarray(time_steps) if time_steps is not None else jnp.ones(100)
+        )
+        rng_key = rng_key if rng_key is not None else jax.random.PRNGKey(0)
 
-        # Initialize the RNG key if one is not provided.
-        if rng_key is None:
-            rng_key = jax.random.PRNGKey(0)
+        # Function to execute a single trajectory
+        def run_single_trajectory(rng_key, attributes):
+            """Execute a single trajectory using lax.scan."""
 
-        # Define a wrapper function to adapt our scan function for use with
-        # JAX's `lax.scan`. The wrapper handles the carry (attributes and RNG key)
-        # and updates them at each iteration based on the time step's input.
-        def scan_wrapper(carry, inputs):
-            attributes, rng_key = carry
-            # Call the pre-bound scan function.
-            # Expected to return new attributes, a duplicate of updated attributes
-            # (for trajectory), and an updated RNG key.
-            new_attributes, updated_attributes, rng_key = self.scan_fn(
-                attributes, inputs, rng_key=rng_key
-            )
-            # Return the new carry (new attributes and RNG key) and the output
-            # for this time step.
-            return (new_attributes, rng_key), updated_attributes
+            def scan_wrapper(carry, inputs):
+                attr, key = carry
+                new_attr, updated_attr, key = new_self.scan_fn(
+                    attr, inputs, rng_key=key
+                )
+                return (new_attr, key), updated_attr
 
-        # Use JAX's `lax.scan` to iteratively apply `scan_wrapper` over the time_steps.
-        # This returns:
-        #   - (final_attributes, final_rng_key): the final state after all iterations.
-        #   - node_trajectories: the collection of outputs (updated attributes)
-        #     for each time step.
-        (final_attributes, _), node_trajectories = lax.scan(
-            scan_wrapper, (self.attributes, rng_key), time_steps
+            return lax.scan(scan_wrapper, (attributes, rng_key), time_steps)
+
+        # Clone attributes to add batch dimension
+        batched_attributes = jax.tree_util.tree_map(
+            lambda x: jnp.broadcast_to(
+                jnp.array(x, dtype=jnp.float32), (n_trajectories,) + jnp.shape(x)
+            ),
+            new_self.attributes,
         )
 
-        # Store the results for later use or inspection.
-        self.node_trajectories = node_trajectories
-        self.last_attributes = final_attributes
+        # Create separate RNG keys for each trajectory
+        rng_keys = jax.random.split(rng_key, n_trajectories)
 
-        return self
+        # Apply run_single_trajectory using vmap
+        (final_attributes, _), node_trajectories = jax.vmap(run_single_trajectory)(
+            rng_keys, batched_attributes
+        )
+
+        # Store results in the new object
+        new_self.node_trajectories = node_trajectories
+        new_self.last_attributes = final_attributes
+
+        return new_self
 
     def input_data(
         self,
