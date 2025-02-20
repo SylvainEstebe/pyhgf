@@ -295,6 +295,22 @@ def plot_nodes(
                 ax.set_ylabel(rf"$\mu_{{{node_idx}}}$")
                 handles_labels["Expected mean"] = line
 
+                # 🔹 Ajouter les observations discrètes (Bernoulli/Catégoriques)
+                if (
+                    network.edges[node_idx].node_type == 1
+                ):  # Vérifie si c'est un nœud discret
+                    scatter = ax.scatter(
+                        x=df_traj.time,
+                        y=df_traj[f"x_{node_idx}_mean"],
+                        s=3,
+                        label="Observed",
+                        color="#2a2a2a",
+                        marker="o",
+                        zorder=2,
+                        alpha=0.8,
+                    )
+                    handles_labels["Observed"] = scatter
+
                 # If the node is continuous
                 if network.edges[node_idx].node_type == 2:
                     scatter = ax.scatter(
