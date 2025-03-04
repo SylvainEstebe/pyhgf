@@ -1,5 +1,6 @@
 # Author: Nicolas Legrand <nicolas.legrand@cas.au.dk>
 
+import copy
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import jax
@@ -145,6 +146,7 @@ class Network:
         observed: Optional[np.ndarray] = None,
         input_idxs: Optional[Tuple[int]] = None,
         rng_key: Optional[jax.random.PRNGKey] = None,
+        simulate_future: bool = False,  # new parameter to trigger future simulation
     ) -> "Network":
         """Add new observations.
 
@@ -176,6 +178,9 @@ class Network:
             Indexes on the state nodes receiving observations.
         rng_key :
             Random key for the random number generator.
+        simulate_future :
+            If True, the function will simulate future trajectories
+            after processing the input data.
 
         """
         # --- Mode Propagation de Croyances (avec données d'observation) ---
@@ -224,6 +229,61 @@ class Network:
             # belief trajectories
             self.node_trajectories = node_trajectories
             self.last_attributes = last_attributes
+
+            # --- Optionally simulate future trajectories ---
+            if simulate_future:
+                # Ensure rng_key is valid
+                if rng_key is None:
+                    rng_key = jax.random.PRNGKey(0)
+
+                # Copy the current network state; using deepcopy is one option.
+                future_network = copy.deepcopy(self)
+
+                # For the future simulation we follow the inference branch.
+                # Here, we assume a default future time_steps length if not provided.
+                future_time_steps = np.ones(100)
+
+                # Create the inference version of the scan function if needed.
+                if future_network.scan_fn is None:
+                    future_network = future_network.create_belief_propagation_fn(
+                        sophisticated=True, rng_key=rng_key
+                    )
+
+                # Define the single trajectory run (mirroring the inference branch).
+                def run_single_trajectory(rng_key, attributes):
+                    def scan_wrapper(carry, future_input):
+                        attr, key = carry
+                        new_attr, updated_attr, key = future_network.scan_fn(
+                            attr, future_input, rng_key=key
+                        )
+                        return (new_attr, key), updated_attr
+
+                    return lax.scan(
+                        scan_wrapper, (attributes, rng_key), future_time_steps
+                    )
+
+                # Add a batch dimension to the last attributes.
+                batched_attributes = jax.tree_util.tree_map(
+                    lambda x: jnp.broadcast_to(
+                        jnp.asarray(x), (n_trajectories,) + jnp.asarray(x).shape
+                    ),
+                    future_network.last_attributes,
+                )
+                rng_keys = jax.random.split(rng_key, n_trajectories)
+
+                # Use vmap to run multiple trajectories in parallel.
+                (final_attributes, _), future_node_trajectories = jax.vmap(
+                    run_single_trajectory
+                )(rng_keys, batched_attributes)
+
+                # Update the copied network with future simulation results.
+                future_network.node_trajectories = future_node_trajectories
+                future_network.last_attributes = final_attributes
+
+                # Return the network that now contains the future simulation.
+                return future_network
+
+            # If no future simulation is requested, return the updated network.
             return self
 
         # --- Mode Inférence/Prédiction (sans données d'observation) ---
