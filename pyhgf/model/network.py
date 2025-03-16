@@ -648,8 +648,8 @@ class Network:
 
     def surprise(
         self,
-        response_function: Callable,
-        response_function_inputs: Tuple = (),
+        response_function: Callable = lambda: None,
+        response_function_inputs: Optional[Union[ArrayLike, tuple]] = None,
         response_function_parameters: Optional[
             Union[np.ndarray, ArrayLike, float]
         ] = None,
