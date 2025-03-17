@@ -1,12 +1,16 @@
 # Author: Nicolas Legrand <nicolas.legrand@cas.au.dk>
-
 import jax.numpy as jnp
+from jax import random
 from pytest import raises
 
 from pyhgf import load_data
 from pyhgf.model import Network
-from pyhgf.typing import AdjacencyLists
+from pyhgf.typing import AdjacencyLists, Attributes, Edges, UpdateSequence
+from pyhgf.updates.observation import set_observation
 from pyhgf.utils import add_parent, list_branches, remove_node
+from pyhgf.utils.beliefs_propagation import beliefs_propagation
+from pyhgf.utils.handle_observation import handle_observation
+from pyhgf.utils.sample_node_distribution import sample_node_distribution
 
 
 def test_imports():
@@ -160,25 +164,167 @@ def test_scan_sampling():
     ), "Samples should be finite and not include NaNs or infinities."
 
 
-def test_handle_observation():
-    """Test the handle_observation function."""
-    from pyhgf.model import handle_observation
+# --- Dummy functions and classes for testing ---
 
-    # Mock attributes and inputs
-    attributes = {0: {"expected_mean": 0.5, "expected_precision": 10.0}}
-    rng_key = jnp.array([0, 1])
-    node_idx = 0
-    sophisticated = True
-    edges = {0: {"node_type": 2}}  # Continuous
 
-    updated_attributes, new_rng_key = handle_observation(
-        attributes, node_idx, rng_key, sophisticated, edges
+def dummy_prediction_update(attributes, node_idx, edges):
+    """Dummy prediction function that adds a flag."""
+    attributes[node_idx]["predicted"] = True
+    return attributes
+
+
+def dummy_update(attributes, node_idx, edges):
+    """Dummy update function that adds a flag."""
+    attributes[node_idx]["updated"] = True
+    return attributes
+
+
+# DummyEdge class to simulate an edges object with a node_type attribute.
+class DummyEdge:
+    def __init__(self, node_type):
+        self.node_type = node_type
+
+
+def dummy_set_observation(attributes, node_idx, values, observed):
+    """Dummy set_observation function that updates the dictionary."""
+    attributes[node_idx]["observation"] = values
+    attributes[node_idx]["observed"] = observed
+    return attributes
+
+
+# --- Tests on sample_node_distribution ---
+
+
+def test_sample_node_distribution_continuous():
+    """Test sampling for a continuous model (model_type == 2)."""
+    attributes = {
+        0: {"expected_mean": 5.0, "expected_precision": 4.0}
+    }  # sigma = 1/√4 = 0.5
+    rng_key = random.PRNGKey(0)
+    sample, new_key = sample_node_distribution(attributes, 0, rng_key, model_type=2)
+    # Check that sample is indeed a scalar (float or jnp.float32)
+    assert sample is not None
+    assert 5.0 - 3.0 * 0.5 <= float(sample) <= 5.0 + 3.0 * 0.5
+
+
+def test_sample_node_distribution_discrete():
+    """Test sampling for a discrete model."""
+    attributes = {
+        0: {"expected_mean": 0.0, "expected_precision": 1.0}
+    }  # values not used here
+    rng_key = random.PRNGKey(0)
+    sample, new_key = sample_node_distribution(attributes, 0, rng_key, model_type=1)
+    # The result should be 0.0 or 1.0
+    sample_val = float(sample)
+    assert sample_val in [0.0, 1.0]
+
+
+# --- Test on handle_observation ---
+
+
+def test_handle_observation(monkeypatch):
+    """Test handle_observation with a continuous edge."""
+    # Replace set_observation with our dummy to verify the update.
+    monkeypatch.setattr(
+        set_observation.__module__, "set_observation", dummy_set_observation
     )
 
-    assert 0 in updated_attributes, "Node index should exist in updated attributes."
-    assert (
-        updated_attributes[0]["observed"] == 1
-    ), "Observation should be set when sophisticated=True."
-    assert (
-        new_rng_key is not None
-    ), "Random key should be updated after handling observation."
+    attributes = {0: {"expected_mean": 1.0, "expected_precision": 1.0}}
+    edges = {0: DummyEdge(node_type=2)}
+    rng_key = random.PRNGKey(0)
+
+    updated_attributes, new_key = handle_observation(attributes, 0, rng_key, edges)
+    # Check that the set_observation function has been applied
+    assert updated_attributes[0]["observed"] == 1
+    assert "observation" in updated_attributes[0]
+
+
+# --- Tests on beliefs_propagation ---
+
+
+def test_beliefs_propagation_sophisticated(monkeypatch):
+    """Test beliefs_propagation in sophisticated mode."""
+    # Replace set_observation with our dummy
+    monkeypatch.setattr(
+        set_observation.__module__, "set_observation", dummy_set_observation
+    )
+
+    # Prepare the sequence of updates (prediction and update)
+    prediction_steps = [(0, dummy_prediction_update)]
+    update_steps = [(0, dummy_update)]
+    update_sequence: UpdateSequence = (prediction_steps, update_steps)
+
+    # Prepare attributes:
+    # - Key -1 is used to store the time_step.
+    # - Node 0 has parameters for sampling.
+    attributes: Attributes = {
+        -1: {},
+        0: {"expected_mean": 1.0, "expected_precision": 1.0},
+    }
+    edges: Edges = {0: DummyEdge(node_type=2)}
+
+    # In sophisticated mode, inputs are directly the time_step.
+    time_step = 10
+    inputs = time_step
+    input_idxs = (0,)
+    rng_key = random.PRNGKey(0)
+
+    updated_attr, _ = beliefs_propagation(
+        attributes,
+        inputs,
+        update_sequence,
+        edges,
+        input_idxs,
+        sophisticated=True,
+        rng_key=rng_key,
+    )
+    # Check that time_step has been assigned correctly
+    assert updated_attr[-1]["time_step"] == time_step
+    # Check that prediction and update functions have been called
+    assert updated_attr[0]["predicted"] is True
+    assert updated_attr[0]["updated"] is True
+    # Check that handle_observation has updated the observation
+    assert updated_attr[0]["observed"] == 1
+
+
+def test_beliefs_propagation_non_sophisticated(monkeypatch):
+    """Test beliefs_propagation in non-sophisticated mode."""
+    monkeypatch.setattr(
+        set_observation.__module__, "set_observation", dummy_set_observation
+    )
+
+    prediction_steps = [(0, dummy_prediction_update)]
+    update_steps = [(0, dummy_update)]
+    update_sequence: UpdateSequence = (prediction_steps, update_steps)
+
+    attributes: Attributes = {
+        -1: {},
+        0: {"expected_mean": 1.0, "expected_precision": 1.0},
+    }
+    edges: Edges = {0: DummyEdge(node_type=2)}
+
+    values_tuple = (jnp.array([[1.0]]),)  # one observation per node, shape (1, 1)
+    observed_tuple = (jnp.array([[0]]),)  # observation mask
+    time_step = 10
+    inputs = (values_tuple, observed_tuple, time_step)
+    input_idxs = (0,)
+    rng_key = random.PRNGKey(0)
+
+    updated_attr, _ = beliefs_propagation(
+        attributes,
+        inputs,
+        update_sequence,
+        edges,
+        input_idxs,
+        sophisticated=False,
+        rng_key=rng_key,
+    )
+    # Check time_step assignment
+    assert updated_attr[-1]["time_step"] == time_step
+    # Check that prediction and update functions have been called
+    assert updated_attr[0]["predicted"] is True
+    assert updated_attr[0]["updated"] is True
+    # set_observation is called with values.squeeze().
+    # Here values.squeeze() gives 1.0 and observed is 0.
+    assert updated_attr[0]["observation"] == 1.0
+    assert updated_attr[0]["observed"] == 0
