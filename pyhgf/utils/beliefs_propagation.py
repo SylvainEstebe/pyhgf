@@ -2,14 +2,14 @@
 
 
 from functools import partial
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple, cast
 
 from jax import jit, random
 from jax.typing import ArrayLike
 
 from pyhgf.typing import Attributes, Edges, UpdateSequence
 from pyhgf.updates.observation import set_observation
-from pyhgf.utils.handle_observation import handle_observation
+from pyhgf.utils.sample_node_distribution import sample_node_distribution
 
 
 @partial(
@@ -79,12 +79,25 @@ def beliefs_propagation(
     for node_idx, update_fn in prediction_steps:
         attributes = update_fn(attributes=attributes, node_idx=node_idx, edges=edges)
 
-    # 2. Handle observations (branch only on sophisticated)
+    # 2. Handle observations
     if sophisticated:
-        # Use handle_observation for each input node.
+        # Inline handling of observation for each input node
         for node_idx in input_idxs:
-            attributes, rng_key = handle_observation(
-                attributes, node_idx, rng_key, edges
+            # Sample the node distribution
+            sampled_value, rng_key = sample_node_distribution(
+                cast(
+                    Dict[int, dict[Any, Any]], attributes
+                ),  # cast for type compatibility
+                node_idx,
+                rng_key,
+                edges[node_idx].node_type,
+            )
+            # Set the observation (using a constant observation flag, here set as 1)
+            attributes = set_observation(
+                attributes=attributes,
+                node_idx=node_idx,
+                values=sampled_value,
+                observed=1,
             )
     else:
         # Unpack observation data and update each input node.
