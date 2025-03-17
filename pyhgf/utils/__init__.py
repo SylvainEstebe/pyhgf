@@ -4,8 +4,6 @@ from .beliefs_propagation import beliefs_propagation
 from .fill_categorical_state_node import fill_categorical_state_node
 from .get_input_idxs import get_input_idxs
 from .get_update_sequence import get_update_sequence
-from .handle_observation import handle_observation
-from .inference_prediction import inference_prediction
 from .list_branches import list_branches
 from .remove_node import remove_node
 from .sample_node_distribution import sample_node_distribution
