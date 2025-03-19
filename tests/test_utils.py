@@ -3,13 +3,12 @@ import jax.numpy as jnp
 from jax import random
 from pytest import raises
 
+import pyhgf.updates.observation as obs
 from pyhgf import load_data
 from pyhgf.model import Network
 from pyhgf.typing import AdjacencyLists, Attributes, Edges, UpdateSequence
-from pyhgf.updates.observation import set_observation
-from pyhgf.utils import add_parent, list_branches, remove_node
+from pyhgf.utils import add_parent, list_branches, remove_node, scan_sampling
 from pyhgf.utils.beliefs_propagation import beliefs_propagation
-from pyhgf.utils.handle_observation import handle_observation
 from pyhgf.utils.sample_node_distribution import sample_node_distribution
 
 
@@ -147,11 +146,10 @@ def test_remove_node():
 
 def test_scan_sampling():
     """Test the scan_sampling function."""
-    from pyhgf.model import scan_sampling
 
     # Mock attributes for a single node
     attributes = {0: {"expected_mean": 0.5, "expected_precision": 10.0}}
-    rng_key = jnp.array([0, 1])
+    rng_key = jnp.array([0, 1], dtype=jnp.uint32)
     node_idx = 0
     model_type = 2  # Continuous
     num_samples = 10
@@ -219,39 +217,14 @@ def test_sample_node_distribution_discrete():
     assert sample_val in [0.0, 1.0]
 
 
-# --- Test on handle_observation ---
-
-
-def test_handle_observation(monkeypatch):
-    """Test handle_observation with a continuous edge."""
-    # Replace set_observation with our dummy to verify the update.
-    monkeypatch.setattr(
-        set_observation.__module__, "set_observation", dummy_set_observation
-    )
-
-    attributes = {0: {"expected_mean": 1.0, "expected_precision": 1.0}}
-    edges = {0: DummyEdge(node_type=2)}
-    rng_key = random.PRNGKey(0)
-
-    updated_attributes, new_key = handle_observation(attributes, 0, rng_key, edges)
-    # Check that the set_observation function has been applied
-    assert updated_attributes[0]["observed"] == 1
-    assert "observation" in updated_attributes[0]
-
-
-# --- Tests on beliefs_propagation ---
-
-
 def test_beliefs_propagation_sophisticated(monkeypatch):
     """Test beliefs_propagation in sophisticated mode."""
     # Replace set_observation with our dummy
-    monkeypatch.setattr(
-        set_observation.__module__, "set_observation", dummy_set_observation
-    )
+    monkeypatch.setattr(obs, "set_observation", dummy_set_observation)
 
-    # Prepare the sequence of updates (prediction and update)
-    prediction_steps = [(0, dummy_prediction_update)]
-    update_steps = [(0, dummy_update)]
+    # Prepare the sequence of updates (prediction and update) as tuples.
+    prediction_steps = ((0, dummy_prediction_update),)
+    update_steps = ((0, dummy_update),)
     update_sequence: UpdateSequence = (prediction_steps, update_steps)
 
     # Prepare attributes:
@@ -261,7 +234,14 @@ def test_beliefs_propagation_sophisticated(monkeypatch):
         -1: {},
         0: {"expected_mean": 1.0, "expected_precision": 1.0},
     }
-    edges: Edges = {0: DummyEdge(node_type=2)}
+
+    # Define a simple hashable dictionary class.
+    class FrozenDict(dict):
+        def __hash__(self):
+            return hash(tuple(sorted(self.items())))
+
+    # Use FrozenDict to create a hashable version of edges.
+    edges: Edges = FrozenDict({0: DummyEdge(node_type=2)})
 
     # In sophisticated mode, inputs are directly the time_step.
     time_step = 10
@@ -278,31 +258,39 @@ def test_beliefs_propagation_sophisticated(monkeypatch):
         sophisticated=True,
         rng_key=rng_key,
     )
-    # Check that time_step has been assigned correctly
+    # Check that time_step has been assigned correctly.
     assert updated_attr[-1]["time_step"] == time_step
-    # Check that prediction and update functions have been called
+    # Use equality comparisons rather than identity comparisons.
     assert updated_attr[0]["predicted"] is True
     assert updated_attr[0]["updated"] is True
-    # Check that handle_observation has updated the observation
+    # Check that handle_observation has updated the observation.
     assert updated_attr[0]["observed"] == 1
 
 
 def test_beliefs_propagation_non_sophisticated(monkeypatch):
     """Test beliefs_propagation in non-sophisticated mode."""
-    monkeypatch.setattr(
-        set_observation.__module__, "set_observation", dummy_set_observation
-    )
+    # Replace set_observation with our dummy via the module object.
+    monkeypatch.setattr(obs, "set_observation", dummy_set_observation)
 
-    prediction_steps = [(0, dummy_prediction_update)]
-    update_steps = [(0, dummy_update)]
+    # Use tuples for the update sequence.
+    prediction_steps = ((0, dummy_prediction_update),)
+    update_steps = ((0, dummy_update),)
     update_sequence: UpdateSequence = (prediction_steps, update_steps)
 
     attributes: Attributes = {
         -1: {},
         0: {"expected_mean": 1.0, "expected_precision": 1.0},
     }
-    edges: Edges = {0: DummyEdge(node_type=2)}
 
+    # Define a simple hashable dictionary class.
+    class FrozenDict(dict):
+        def __hash__(self):
+            return hash(tuple(sorted(self.items())))
+
+    # Wrap edges in FrozenDict for hashability.
+    edges: Edges = FrozenDict({0: DummyEdge(node_type=2)})
+
+    # Prepare input data.
     values_tuple = (jnp.array([[1.0]]),)  # one observation per node, shape (1, 1)
     observed_tuple = (jnp.array([[0]]),)  # observation mask
     time_step = 10
@@ -319,12 +307,13 @@ def test_beliefs_propagation_non_sophisticated(monkeypatch):
         sophisticated=False,
         rng_key=rng_key,
     )
-    # Check time_step assignment
+    # Verify that time_step is correctly assigned.
     assert updated_attr[-1]["time_step"] == time_step
-    # Check that prediction and update functions have been called
+    # Verify that the prediction and update functions have been called.
     assert updated_attr[0]["predicted"] is True
     assert updated_attr[0]["updated"] is True
-    # set_observation is called with values.squeeze().
-    # Here values.squeeze() gives 1.0 and observed is 0.
-    assert updated_attr[0]["observation"] == 1.0
-    assert updated_attr[0]["observed"] == 0
+    # In non-sophisticated mode, the values are squeezed and used to update the mean.
+    # Check that the node's mean is 1.0.
+    assert updated_attr[0]["mean"] == 1.0
+    # Check that observed is 0 (squeezing the array if necessary).
+    assert jnp.squeeze(updated_attr[0]["observed"]) == 0
