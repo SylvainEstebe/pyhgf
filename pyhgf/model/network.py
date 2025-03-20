@@ -146,7 +146,6 @@ class Network:
         observed: Optional[np.ndarray] = None,
         input_idxs: Optional[Tuple[int]] = None,
         rng_key: Optional[jax.random.PRNGKey] = None,
-        simulate_future: bool = False,  # new parameter to trigger future simulation
     ) -> "Network":
         """Add new observations.
 
@@ -230,117 +229,79 @@ class Network:
             self.node_trajectories = node_trajectories
             self.last_attributes = last_attributes
 
-            # --- Optionally simulate future trajectories ---
-            if simulate_future:
-                # Ensure rng_key is valid
-                if rng_key is None:
-                    rng_key = jax.random.PRNGKey(0)
+        return self
 
-                # Copy the current network state; using deepcopy is one option.
-                future_network = copy.deepcopy(self)
+    def predict(
+        self,
+        n_trajectories: int = 1,
+        time_steps: Optional[np.ndarray] = None,
+        rng_key: Optional[jax.random.PRNGKey] = None,
+    ) -> "Network":
+        """Simulate l'évolution future du réseau à partir de son état actuel.
 
-                # For the future simulation we follow the inference branch.
-                # Here, we assume a default future time_steps length if not provided.
-                future_time_steps = np.ones(100)
+        Parameters
+        ----------
+        n_trajectories : int
+            Nombre de trajectoires à simuler en parallèle.
+        time_steps : Optional[np.ndarray]
+            Vecteur des pas de temps pour la simulation.
+            Par défaut, on utilise un vecteur de 100 pas de temps (np.ones(100)).
+        rng_key : Optional[jax.random.PRNGKey]
+            Clé aléatoire pour la simulation. Si None, une clé par défaut est utilisée.
 
-                # Create the inference version of the scan function if needed.
-                if future_network.scan_fn is None:
-                    future_network = future_network.create_belief_propagation_fn(
-                        sophisticated=True, rng_key=rng_key
-                    )
+        Returns
+        -------
+        Network
+            Une copie du réseau mise à jour avec les trajectoires simulées futures.
 
-                # Define the single trajectory run (mirroring the inference branch).
-                def run_single_trajectory(rng_key, attributes):
-                    def scan_wrapper(carry, future_input):
-                        attr, key = carry
-                        new_attr, updated_attr, key = future_network.scan_fn(
-                            attr, future_input, rng_key=key
-                        )
-                        return (new_attr, key), updated_attr
+        """
+        # Initialisation de la clé RNG si nécessaire
+        if rng_key is None:
+            rng_key = jax.random.PRNGKey(0)
 
-                    return lax.scan(
-                        scan_wrapper, (attributes, rng_key), future_time_steps
-                    )
+        # Définir le vecteur de pas de temps par défaut si non fourni
+        if time_steps is None:
+            time_steps = np.ones(100)
 
-                # Add a batch dimension to the last attributes.
-                batched_attributes = jax.tree_util.tree_map(
-                    lambda x: jnp.broadcast_to(
-                        jnp.asarray(x), (n_trajectories,) + jnp.asarray(x).shape
-                    ),
-                    future_network.last_attributes,
-                )
-                rng_keys = jax.random.split(rng_key, n_trajectories)
+        # Copier l'état actuel du réseau pour la simulation future
+        future_network = copy.deepcopy(self)
 
-                # Use vmap to run multiple trajectories in parallel.
-                (final_attributes, _), future_node_trajectories = jax.vmap(
-                    run_single_trajectory
-                )(rng_keys, batched_attributes)
-
-                # Update the copied network with future simulation results.
-                future_network.node_trajectories = future_node_trajectories
-                future_network.last_attributes = final_attributes
-
-                # Return the network that now contains the future simulation.
-                return future_network
-
-            # If no future simulation is requested, return the updated network.
-            return self
-
-        # --- Mode Inférence/Prédiction (sans données d'observation) ---
-        else:
-            # Update input indices if provided.
-            if input_idxs is not None:
-                self.input_idxs = input_idxs
-
-            # If the scan function is not yet defined, create it.
-            if self.scan_fn is None:
-                self = self.create_belief_propagation_fn(
-                    sophisticated=True, rng_key=rng_key
-                )
-
-            # If no time_steps are provided, use a default array.
-            if time_steps is None:
-                time_steps = np.ones(100)
-
-            # Initialize the RNG key if necessary.
-            if rng_key is None:
-                rng_key = jax.random.PRNGKey(0)
-
-            # Define the function to execute a single trajectory.
-            def run_single_trajectory(rng_key, attributes):
-                # Wrapper function used within lax.scan.
-                def scan_wrapper(carry, inputs):
-                    # carry contains attributes and the RNG key.
-                    attr, key = carry
-                    # Call the network's inference function (scan_fn).
-                    new_attr, updated_attr, key = self.scan_fn(
-                        attr, inputs, rng_key=key
-                    )
-                    return (new_attr, key), updated_attr
-
-                # Execute the scan over all time_steps.
-                return lax.scan(scan_wrapper, (attributes, rng_key), time_steps)
-
-            # Clone  self.attributes so it has a batch dimension
-            batched_attributes = jax.tree_util.tree_map(
-                lambda x: jnp.broadcast_to(
-                    jnp.asarray(x), (n_trajectories,) + jnp.asarray(x).shape
-                ),
-                self.attributes,
-            )
-            # Create n_trajectories different RNG keys.
-            rng_keys = jax.random.split(rng_key, n_trajectories)
-
-            # Use vmap to apply run_single_trajectory to each trajectory.
-            (final_attributes, _), node_trajectories = jax.vmap(run_single_trajectory)(
-                rng_keys, batched_attributes
+        if future_network.scan_fn is None:
+            future_network = future_network.create_belief_propagation_fn(
+                sophisticated=True, rng_key=rng_key
             )
 
-            # Store the results in the self object.
-            self.node_trajectories = node_trajectories
-            self.last_attributes = final_attributes
+        # Définir la fonction d'exécution d'une trajectoire unique
+        def run_single_trajectory(rng_key, attributes):
+            def scan_wrapper(carry, future_input):
+                attr, key = carry
+                new_attr, updated_attr, key = future_network.scan_fn(
+                    attr, future_input, rng_key=key
+                )
+                return (new_attr, key), updated_attr
 
-            return self
+            return lax.scan(scan_wrapper, (attributes, rng_key), time_steps)
+
+        # Ajouter une dimension batch aux attributs actuels du réseau
+        batched_attributes = jax.tree_util.tree_map(
+            lambda x: jnp.broadcast_to(
+                jnp.asarray(x), (n_trajectories,) + jnp.asarray(x).shape
+            ),
+            future_network.last_attributes,
+        )
+        # Générer autant de clés RNG qu'il y a de trajectoires
+        rng_keys = jax.random.split(rng_key, n_trajectories)
+
+        # Exécuter la simulation en parallèle pour chaque trajectoire
+        (final_attributes, _), future_node_trajectories = jax.vmap(
+            run_single_trajectory
+        )(rng_keys, batched_attributes)
+
+        # Mettre à jour le réseau copié avec les résultats de la simulation future
+        future_network.last_attributes = final_attributes
+        future_network.node_trajectories = future_node_trajectories
+
+        return future_network
 
     def input_custom_sequence(
         self,
