@@ -1,12 +1,15 @@
 # Author: Nicolas Legrand <nicolas.legrand@cas.au.dk>
 
 import jax.numpy as jnp
+import pytest
+from jax import random
 from pytest import raises
 
 from pyhgf import load_data
 from pyhgf.model import Network
 from pyhgf.typing import AdjacencyLists
 from pyhgf.utils import add_parent, list_branches, remove_node
+from pyhgf.utils.beliefs_propagation import beliefs_propagation
 
 
 def test_imports():
@@ -139,3 +142,67 @@ def test_remove_node():
 
     assert len(new_attributes) == 5
     assert len(new_edges) == 4
+
+
+def test_belief_propagation():
+    """Test the belief propagation function for three observation types."""
+
+    network = (
+        Network()
+        .add_nodes(kind="continuous-state")
+        .add_nodes(kind="binary-state")
+        .add_nodes(value_children=0)
+        .add_nodes(value_children=1)
+    )
+
+    attributes, edges, update_sequence = network.get_network()
+
+    # 1 - External ---------------------------------------------------------------------
+    new_attributes, _ = beliefs_propagation(
+        attributes=attributes,
+        inputs=(jnp.array([0.25, 1.0]), jnp.array([1, 1]), 1.0),
+        update_sequence=update_sequence,
+        edges=edges,
+        input_idxs=(0, 1),
+        observations="external",
+        rng_key=None,
+    )
+
+    # 2 - Generative -------------------------------------------------------------------
+    rng_key = random.PRNGKey(0)
+    new_attributes, _ = beliefs_propagation(
+        attributes=attributes,
+        inputs=(None, None, 1.0),
+        update_sequence=update_sequence,
+        edges=edges,
+        input_idxs=(0, 1),
+        observations="generative",
+        rng_key=rng_key,
+    )
+    assert jnp.isclose(new_attributes[0]["mean"], -1.2515389)
+    assert jnp.isclose(new_attributes[1]["mean"], 1.0)
+
+    # 3 - Deprived ---------------------------------------------------------------------
+    new_attributes, _ = beliefs_propagation(
+        attributes=attributes,
+        inputs=(jnp.array([0.25, 1.0]), jnp.array([1, 1]), 1.0),
+        update_sequence=update_sequence,
+        edges=edges,
+        input_idxs=(0, 1),
+        observations="deprived",
+        rng_key=None,
+    )
+    assert jnp.isclose(new_attributes[0]["mean"], 0.0)
+    assert jnp.isclose(new_attributes[1]["mean"], 0.0)
+
+    # expected error when the parameter has invalid name
+    with pytest.raises(KeyError):
+        new_attributes, _ = beliefs_propagation(
+            attributes=attributes,
+            inputs=(jnp.array([0.25, 1.0]), jnp.array([1, 1]), 1.0),
+            update_sequence=update_sequence,
+            edges=edges,
+            input_idxs=(0, 1),
+            observations="error",
+            rng_key=None,
+        )
