@@ -227,7 +227,7 @@ class Network:
         self,
         n_predictions: int,
         time_steps: Optional[np.ndarray] = None,
-    ) -> dict:
+    ) -> Attributes:
         """Generate predictions using the utility predict function.
 
         Parameters
@@ -243,7 +243,7 @@ class Network:
                 with an extra dimension corresponding to the number of predictions.
 
         """
-        return predict(self, n_predictions, time_steps=time_steps)
+        return predict(self, time_steps=time_steps, n_predictions=n_predictions)
 
     def input_custom_sequence(
         self,

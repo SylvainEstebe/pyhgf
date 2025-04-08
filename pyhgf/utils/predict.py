@@ -1,37 +1,42 @@
-from typing import Optional
+# Author: Nicolas Legrand <nicolas.legrand@cas.au.dk>
+# Author: Sylvain Estebe
 
-import numpy as np
+from typing import TYPE_CHECKING
+
 from jax import random, vmap
 from jax.lax import scan
-from jax.random import PRNGKey
 from jax.tree_util import Partial
+from jax.typing import ArrayLike
 
-from pyhgf.utils import beliefs_propagation, get_update_sequence
+from pyhgf.typing import Attributes
+
+if TYPE_CHECKING:
+    from pyhgf.model import Network
 
 
 def predict(
-    Network,
-    n_predictions: int,
-    time_steps: Optional[np.ndarray] = None,
-    rng_key: random.PRNGKey = PRNGKey(0),
+    network: "Network",
+    time_steps: ArrayLike,
+    n_predictions: int = 1,
+    rng_key: ArrayLike = random.key(0),
     overwrite: bool = False,
     update_type: str = "eHGF",
-):
+) -> Attributes:
     """Generate n_predictions from the current state of the network in generative mode.
 
     Parameters
     ----------
-    Network : object
+    network :
         The network instance used for generating predictions.
-    n_predictions : int
-        Number of predictions to generate.
-    time_steps : Optional[np.ndarray], optional
-        Array of time steps. If None, defaults to an array of ones of length 100.
-    rng_key : random.PRNGKey, optional
+    time_steps :
+        Array of time steps.
+    n_predictions :
+        Number of predictions to generate. Defaults to 1.
+    rng_key :
         Random number generator key, by default PRNGKey(0).
-    overwrite : bool, optional
+    overwrite :
         Whether to overwrite the existing generative scan function
-    update_type : str, optional
+    update_type :
         Type of update to use for belief propagation, by default "eHGF".
 
     Returns
@@ -41,37 +46,31 @@ def predict(
         corresponding to the number of predictions.
 
     """
-    # Set the time step vector. If none is provided, default to a vector of ones.
-    if time_steps is None:
-        time_steps = np.ones(100)
+    from pyhgf.utils import beliefs_propagation, get_update_sequence
 
     # Ensure that the network's input dimension is initialized.
-    if not Network.input_dim:
-        Network.get_input_dimension()
+    if not network.input_dim:
+        network.get_input_dimension()
 
     # Create the update sequence if it does not exist.
-    if Network.update_sequence is None:
-        Network.update_sequence = get_update_sequence(
-            network=Network, update_type=update_type
+    if network.update_sequence is None:
+        network.update_sequence = get_update_sequence(
+            network=network, update_type=update_type
         )
 
     # Create the generative scan function if it doesn't exist or if overwrite is True.
-    if (
-        (not hasattr(Network, "scan_fn_generatif"))
-        or (Network.scan_fn_generatif is None)
-        or overwrite
-    ):
-        Network.scan_fn_generatif = Partial(
+    if (network.scan_fn_generatif is None) or overwrite:
+        network.scan_fn_generatif = Partial(
             beliefs_propagation,
-            update_sequence=Network.update_sequence,
-            edges=Network.edges,
-            input_idxs=Network.input_idxs,
+            update_sequence=network.update_sequence,
+            edges=network.edges,
+            input_idxs=network.input_idxs,
             observations="generative",
-            action_fn=Network.action_fn,
+            action_fn=network.action_fn,
         )
 
     # Save the initial state so that every prediction starts from the same point.
-    initial_state = Network.last_attributes
+    initial_state = network.last_attributes
     print(f"Using initial state: {initial_state}")
 
     # Define a function to perform a single prediction using a given RNG key.
@@ -81,14 +80,14 @@ def predict(
 
         # Prepare placeholders for the inputs and observations.
         # In generative mode, these are not used so we set them to None.
-        values_tuple = tuple([None] * len(Network.input_idxs))
-        observed_tuple = tuple([None] * len(Network.input_idxs))
+        values_tuple = tuple([None] * len(network.input_idxs))
+        observed_tuple = tuple([None] * len(network.input_idxs))
         inputs = (values_tuple, observed_tuple, time_steps, rng_keys)
 
         # Execute the belief propagation using scan, starting from the initial state.
         # This returns the final state (last_attributes) and the node trajectories.
-        last_attributes, node_trajectories = scan(
-            Network.scan_fn_generatif,
+        _, node_trajectories = scan(
+            network.scan_fn_generatif,
             initial_state,
             inputs,
         )
