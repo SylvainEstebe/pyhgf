@@ -25,6 +25,7 @@ from pyhgf.utils import (
     beliefs_propagation,
     get_input_idxs,
     get_update_sequence,
+    predict,
     to_pandas,
 )
 
@@ -65,6 +66,7 @@ class Network:
         self.attributes: Attributes = {-1: {"time_step": 0.0}}
         self.update_sequence: Optional[UpdateSequence] = None
         self.scan_fn: Optional[Callable] = None
+        self.scan_fn_generatif: Optional[Callable] = None
         self.additional_parameters: Dict = {}
         self.input_dim: list = []
         self.action_fn: Optional[
@@ -220,6 +222,28 @@ class Network:
         self.last_attributes = last_attributes
 
         return self
+
+    def predictions(
+        self,
+        n_predictions: int,
+        time_steps: Optional[np.ndarray] = None,
+    ) -> dict:
+        """Generate predictions using the utility predict function.
+
+        Parameters
+        ----------
+        n_predictions :
+            Number of predictions to generate.
+        time_steps :
+            Array of time steps.
+
+        Returns
+        -------
+            dict: Dictionary of predictions, where each value is a JAX array
+                with an extra dimension corresponding to the number of predictions.
+
+        """
+        return predict(self, n_predictions, time_steps=time_steps)
 
     def input_custom_sequence(
         self,
