@@ -25,9 +25,9 @@ from pyhgf.utils import (
     beliefs_propagation,
     get_input_idxs,
     get_update_sequence,
-    predict,
     to_pandas,
 )
+from pyhgf.utils.predict_fn import predict_fn
 
 
 class Network:
@@ -63,6 +63,7 @@ class Network:
         self.edges: Edges = ()
         self.n_nodes: int = 0  # number of nodes in the network
         self.node_trajectories: Dict = {}
+        self.predictions: Dict = {}
         self.attributes: Attributes = {-1: {"time_step": 0.0}}
         self.update_sequence: Optional[UpdateSequence] = None
         self.scan_fn: Optional[Callable] = None
@@ -223,11 +224,11 @@ class Network:
 
         return self
 
-    def predictions(
+    def predicts(
         self,
         n_predictions: int,
         time_steps: Optional[np.ndarray] = None,
-    ) -> Attributes:
+    ):
         """Generate predictions using the utility predict function.
 
         Parameters
@@ -237,13 +238,12 @@ class Network:
         time_steps :
             Array of time steps.
 
-        Returns
-        -------
-            dict: Dictionary of predictions, where each value is a JAX array
-                with an extra dimension corresponding to the number of predictions.
-
         """
-        return predict(self, time_steps=time_steps, n_predictions=n_predictions)
+        self.predictions = predict_fn(
+            self, time_steps=time_steps, n_predictions=n_predictions
+        )
+
+        return self
 
     def input_custom_sequence(
         self,
@@ -526,6 +526,10 @@ class Network:
     def plot_trajectories(self, **kwargs):
         """Plot the parameters trajectories."""
         return graphviz.plot_trajectories(network=self, **kwargs)
+
+    def plot_trajectories_sim(self, **kwargs):
+        """Plot the parameters trajectories."""
+        return graphviz.plot_trajectories_sim(network=self, **kwargs)
 
     def plot_correlations(self):
         """Plot the heatmap of cross-trajectories correlation."""
