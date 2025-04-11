@@ -5,7 +5,7 @@ from .fill_categorical_state_node import fill_categorical_state_node
 from .get_input_idxs import get_input_idxs
 from .get_update_sequence import get_update_sequence
 from .list_branches import list_branches
-from .predict import predict
+from .predict_fn import predict_fn
 from .remove_node import remove_node
 from .sample_node_distribution import sample_node_distribution
 from .to_pandas import to_pandas
@@ -21,5 +21,5 @@ __all__ = [
     "to_pandas",
     "remove_node",
     "sample_node_distribution",
-    "predict",
+    "predict_fn",
 ]
