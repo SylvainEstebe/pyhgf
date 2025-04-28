@@ -18,7 +18,7 @@ from pyhgf.model import (
     add_ef_state,
     get_couplings,
 )
-from pyhgf.plots import graphviz, networkx
+from pyhgf.plots import graphviz, matplotlib, networkx
 from pyhgf.typing import Attributes, Edges, NetworkParameters, UpdateSequence
 from pyhgf.utils import (
     add_edges,
@@ -27,7 +27,7 @@ from pyhgf.utils import (
     get_update_sequence,
     to_pandas,
 )
-from pyhgf.utils.predict_fn import predict_fn
+from pyhgf.utils.sample import sample
 
 
 class Network:
@@ -67,12 +67,13 @@ class Network:
         self.attributes: Attributes = {-1: {"time_step": 0.0}}
         self.update_sequence: Optional[UpdateSequence] = None
         self.scan_fn: Optional[Callable] = None
-        self.scan_fn_generatif: Optional[Callable] = None
+        self.scan_fn_sample: Optional[Callable] = None
         self.additional_parameters: Dict = {}
         self.input_dim: list = []
         self.action_fn: Optional[
             Callable[[Attributes, tuple], tuple[Attributes, tuple]]
         ] = None
+        self.last_attributes: Optional[Attributes] = None
 
     @property
     def input_idxs(self):
@@ -91,7 +92,10 @@ class Network:
         self.input_idxs = value
 
     def create_belief_propagation_fn(
-        self, overwrite: bool = True, update_type: str = "eHGF"
+        self,
+        overwrite: bool = True,
+        update_type: str = "eHGF",
+        sampling_fn: bool = False,
     ) -> "Network":
         """Create the belief propagation function.
 
@@ -110,6 +114,9 @@ class Network:
             alternative to the original definition in that it starts by updating the
             mean and then the precision of the parent node, which generally reduces the
             errors associated with impossible parameter space and improves sampling.
+        sampling_fn :
+            If `True`, also create a generative sampling function. This is used for
+            generative sampling of the network. Defaults to `False`.
 
         """
         # get the dimension of the input nodes
@@ -130,6 +137,18 @@ class Network:
                 update_sequence=self.update_sequence,
                 edges=self.edges,
                 input_idxs=self.input_idxs,
+                action_fn=self.action_fn,
+            )
+
+        # Create the generative scan function if it doesn't exist, and if requested.
+        if (self.scan_fn_sample is None) and sampling_fn:
+
+            self.sample_scan_fn = Partial(
+                beliefs_propagation,
+                update_sequence=self.update_sequence,
+                edges=self.edges,
+                input_idxs=self.input_idxs,
+                observations="generative",
                 action_fn=self.action_fn,
             )
 
@@ -224,10 +243,11 @@ class Network:
 
         return self
 
-    def predicts(
+    def sample(
         self,
         n_predictions: int,
         time_steps: Optional[np.ndarray] = None,
+        rng_key: ArrayLike = random.key(0),
     ):
         """Generate predictions using the utility predict function.
 
@@ -237,10 +257,13 @@ class Network:
             Number of predictions to generate.
         time_steps :
             Array of time steps.
+        rng_key :
+            Random number generator key, by default PRNGKey(0).
+
 
         """
-        self.predictions = predict_fn(
-            self, time_steps=time_steps, n_predictions=n_predictions
+        self.samples = sample(
+            self, time_steps=time_steps, n_predictions=n_predictions, rng_key=rng_key
         )
 
         return self
@@ -521,22 +544,22 @@ class Network:
 
     def plot_nodes(self, node_idxs: Union[int, List[int]], **kwargs):
         """Plot the node(s) beliefs trajectories."""
-        return graphviz.plot_nodes(network=self, node_idxs=node_idxs, **kwargs)
+        return matplotlib.plot_nodes(network=self, node_idxs=node_idxs, **kwargs)
 
     def plot_trajectories(self, **kwargs):
         """Plot the parameters trajectories."""
-        return graphviz.plot_trajectories(network=self, **kwargs)
+        return matplotlib.plot_trajectories(network=self, **kwargs)
 
-    def plot_trajectories_sim(self, **kwargs):
+    def plot_samples(self, **kwargs):
         """Plot the parameters trajectories."""
-        return graphviz.plot_trajectories_sim(network=self, **kwargs)
+        return matplotlib.plot_samples(network=self, **kwargs)
 
     def plot_correlations(self):
         """Plot the heatmap of cross-trajectories correlation."""
-        return graphviz.plot_correlations(network=self)
+        return matplotlib.plot_correlations(network=self)
 
     def plot_network(self, backend: str = "graphviz"):
-        """Visualization of node network using GraphViz."""
+        """Visualization of node network using GraphViz or Networkx."""
         if backend == "graphviz":
             return graphviz.plot_network(network=self)
         elif backend == "networkx":

@@ -67,7 +67,7 @@ def plot_samples(
                 network.samples[node]["expected_mean"][i],
                 ls="-",
                 color="#2a2a2a",
-                linewidth=.25,
+                linewidth=0.25,
                 alpha=0.2,
                 zorder=1,
             )
