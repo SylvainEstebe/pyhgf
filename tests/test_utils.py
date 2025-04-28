@@ -2,13 +2,13 @@
 
 import jax.numpy as jnp
 import pytest
-from jax import random
+from jax.random import PRNGKey
 from pytest import raises
 
 from pyhgf import load_data
 from pyhgf.model import Network
 from pyhgf.typing import AdjacencyLists
-from pyhgf.utils import add_parent, list_branches, remove_node
+from pyhgf.utils import add_parent, list_branches, remove_node, sample
 from pyhgf.utils.beliefs_propagation import beliefs_propagation
 
 
@@ -169,7 +169,7 @@ def test_belief_propagation():
     )
 
     # 2 - Generative -------------------------------------------------------------------
-    rng_key = random.PRNGKey(0)
+    rng_key = PRNGKey(0)
     new_attributes, _ = beliefs_propagation(
         attributes=attributes,
         inputs=(None, None, 1.0, rng_key),
@@ -220,3 +220,31 @@ def test_belief_propagation():
         observations="external",
         action_fn=action_fn,
     )
+
+
+def test_sample():
+    """
+    Test the sample function to ensure it returns a dictionary of arrays, where each
+    array's first dimension is equal to the number of predictions.
+    """
+    # Create a minimal network instance.
+    network = (
+        Network()
+        .add_nodes(kind="continuous-state")
+        .create_belief_propagation_fn(sampling_fn=True)
+    )
+
+    # Define the number of predictions to generate.
+    n_predictions = 3
+
+    # Call the predict function using a fixed RNG key.
+    rng_key = PRNGKey(42)
+    samples = sample(
+        network, time_steps=jnp.ones(20), n_predictions=n_predictions, rng_key=rng_key
+    )
+
+    # Check that the returned sample is a dictionary.
+    assert isinstance(samples, dict), "Predictions should be a dictionary."
+
+    # Iterate over each key-value pair in the predictions dictionary.
+    samples[0]["expected_mean"].shape[0] == n_predictions

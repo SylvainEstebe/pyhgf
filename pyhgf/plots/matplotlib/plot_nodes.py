@@ -205,7 +205,7 @@ def plot_nodes(
             # plotting standard deviation
             if ci is True:
                 precision = trajectories_df[f"x_{node_idx}_expected_precision"]
-                sd = np.sqrt(1 / precision)
+                sd = 1.0 / np.sqrt(precision)
                 y1 = mean - sd
                 y2 = mean + sd
 
