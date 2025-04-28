@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 
-from pyhgf.plots.graphviz.plot_nodes import plot_nodes
+from pyhgf.plots.matplotlib.plot_nodes import plot_nodes
 
 if TYPE_CHECKING:
 
