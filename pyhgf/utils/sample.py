@@ -1,10 +1,10 @@
 # Author: Nicolas Legrand <nicolas.legrand@cas.au.dk>
 # Author: Sylvain Estebe
 
-from typing import TYPE_CHECKING
 from functools import partial
+from typing import TYPE_CHECKING
 
-from jax import random, vmap, jit
+from jax import jit, random, vmap
 from jax.lax import scan
 from jax.tree_util import Partial
 from jax.typing import ArrayLike
@@ -62,7 +62,7 @@ def sample(
         sample_scan_fn=network.sample_scan_fn,
         values_tuple=values_tuple,
         observed_tuple=observed_tuple,
-        )
+    )
 
     # Generate a batch of RNG keys, one for each prediction.
     rng_keys_batch = random.split(rng_key, num=n_predictions)
@@ -74,11 +74,7 @@ def sample(
     return predictions
 
 
-@partial(jit,
-         static_argnames=(
-             "sample_scan_fn", "values_tuple", "observed_tuple"
-             )
-         )
+@partial(jit, static_argnames=("sample_scan_fn", "values_tuple", "observed_tuple"))
 def single_sample(
     rng_key,
     initial_state: "Attributes",
@@ -88,7 +84,6 @@ def single_sample(
     observed_tuple,
 ) -> Attributes:
     """Perform a single prediction using the provided RNG key."""
-    
     # Split the RNG key for each time step.
     rng_keys = random.split(rng_key, num=len(time_steps))
     inputs = (values_tuple, observed_tuple, time_steps, rng_keys)
