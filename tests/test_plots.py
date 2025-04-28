@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 import numpy as np
+from jax.random import PRNGKey
 
 from pyhgf import load_data
 from pyhgf.model import HGF, Network
@@ -67,6 +68,15 @@ def test_plotting_functions():
         node_idxs=2,
         show_posterior=True,
     )
+    
+    # plot sampling function
+    three_level_continuous.create_belief_propagation_fn(sampling_fn=True)
+    three_level_continuous.sample(
+        time_steps=np.ones(100),
+        rng_key=PRNGKey(4),
+        n_predictions=50,
+        )
+    three_level_continuous.plot_samples()
 
     ##########
     # Binary #
@@ -130,6 +140,15 @@ def test_plotting_functions():
         node_idxs=2,
         show_posterior=True,
     )
+    
+    # plot sampling function
+    three_level_binary_hgf.create_belief_propagation_fn(sampling_fn=True)
+    three_level_binary_hgf.sample(
+        time_steps=np.ones(100),
+        rng_key=PRNGKey(4),
+        n_predictions=50,
+        )
+    three_level_binary_hgf.plot_samples()
 
     #############
     # Categorical
