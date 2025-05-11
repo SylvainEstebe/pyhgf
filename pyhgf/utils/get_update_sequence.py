@@ -9,6 +9,7 @@ from pyhgf.updates.posterior.categorical import categorical_state_update
 from pyhgf.updates.posterior.continuous import (
     continuous_node_posterior_update,
     continuous_node_posterior_update_ehgf,
+    continuous_node_posterior_update_unbounded,
 )
 from pyhgf.updates.posterior.exponential import (
     posterior_update_exponential_family_dynamic,
@@ -145,13 +146,20 @@ def get_update_sequence(
             if all([i not in nodes_without_prediction_error for i in all_children]):
                 no_update = False
                 if network.edges[idx].node_type == 2:
-                    if update_type == "eHGF":
+                    if update_type == "unbounded":
+                        if network.edges[idx].volatility_children is not None:
+                            update_fn = continuous_node_posterior_update_unbounded
+                        else:
+                            update_fn = continuous_node_posterior_update
+                    elif update_type == "eHGF":
                         if network.edges[idx].volatility_children is not None:
                             update_fn = continuous_node_posterior_update_ehgf
                         else:
                             update_fn = continuous_node_posterior_update
                     elif update_type == "standard":
                         update_fn = continuous_node_posterior_update
+                    else:
+                        raise ValueError("Invalid update type.")
 
                 elif network.edges[idx].node_type == 4:
                     update_fn = None
