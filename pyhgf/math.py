@@ -364,3 +364,63 @@ def binary_surprise_finite_precision(
 def sigmoid_inverse_temperature(x: float, temperature: float) -> float:
     """Compute the sigmoid response function with inverse temperature parameter."""
     return (x**temperature) / (x**temperature + (1 - x) ** temperature)
+
+
+class BetaVariant1:
+    """The Beta distribution as an exponential family, using h(x) = 1/(x(1-x))."""
+
+    @staticmethod
+    def sufficient_statistics_from_observations(x: float) -> Array:
+        """Compute the sufficient statistics from a single observation."""
+        # T(x) = [ln(x), ln(1-x)].
+        return jnp.array([jnp.log(x), jnp.log(1 - x)])
+
+    @staticmethod
+    def sufficient_statistics_from_parameters(alpha: float, beta: float) -> Array:
+        """Compute the expected sufficient statistics from the parameters."""
+        # The formula for the expectation is also unchanged.
+        # E[T(x)] = [E[ln(x)], E[ln(1-x)]]
+        common_term = digamma(alpha + beta)
+        return jnp.array([digamma(alpha) - common_term, digamma(beta) - common_term])
+
+    @staticmethod
+    def base_measure(x: float) -> float:
+        """Compute the base measure of the Beta distribution for this variant."""
+        return 1.0 / (x * (1.0 - x))
+
+    @staticmethod
+    def parameters_from_natural_parameters(etas: ArrayLike) -> Tuple[float, float]:
+        """Compute the standard parameters (alpha, beta) from the natural parameters."""
+        eta_1, eta_2 = etas
+        return float(eta_1), float(eta_2)
+
+
+class Beta:
+    """The Beta distribution as an exponential family, using h(x) = 1."""
+
+    @staticmethod
+    def sufficient_statistics_from_observations(x: float) -> Array:
+        """Compute the sufficient statistics from a single observation."""
+        # T(x) = [ln(x), ln(1-x)]
+        return jnp.array([jnp.log(x), jnp.log(1 - x)])
+
+    @staticmethod
+    def sufficient_statistics_from_parameters(alpha: float, beta: float) -> Array:
+        """Compute the expected sufficient statistics from the parameters."""
+        # This calculates E[T(x)] = [E[ln(x)], E[ln(1-x)]]
+        common_term = digamma(alpha + beta)
+        return jnp.array([digamma(alpha) - common_term, digamma(beta) - common_term])
+
+    @staticmethod
+    def base_measure() -> float:
+        """Compute the base measure of the Beta distribution for this variant."""
+        # The base measure h(x) is 1 for this parameterization.
+        return 1.0
+
+    @staticmethod
+    def parameters_from_natural_parameters(etas: ArrayLike) -> Tuple[float, float]:
+        """Compute standard parameters (alpha, beta) from the natural parameters."""
+        eta_1, eta_2 = etas
+        alpha = eta_1 + 1.0
+        beta = eta_2 + 1.0
+        return alpha, beta
