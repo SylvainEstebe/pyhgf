@@ -4,11 +4,11 @@ import jax.numpy as jnp
 import pytest
 from jax.random import PRNGKey
 from pytest import raises
-
+import numpy as np
 from pyhgf import load_data
 from pyhgf.model import Network
-from pyhgf.typing import AdjacencyLists
-from pyhgf.utils import add_parent, list_branches, remove_node, sample
+from pyhgf.typing import AdjacencyLists, UpdateSequence
+from pyhgf.utils import add_parent, list_branches, remove_node, sample, set_coupling
 from pyhgf.utils.beliefs_propagation import beliefs_propagation
 
 
@@ -41,6 +41,17 @@ def test_add_edges():
     with raises(Exception):
         network.add_edges(kind="error")
 
+    # ensure the coupling function match with the number of children
+    network = (
+        Network()
+        .add_nodes(n_nodes=2)
+        .add_nodes(value_children=[0, 1], coupling_fn=(jnp.tanh, jnp.tanh))
+    )
+    assert (
+        len(network.edges[2].coupling_fn)
+        == network.attributes[2]["value_coupling_children"].shape[0]
+    )
+
 
 def test_find_branch():
     """Test the find_branch function."""
@@ -65,9 +76,8 @@ def test_set_update_sequence():
         .create_belief_propagation_fn()
     )
 
-    predictions, updates = network1.update_sequence
-    assert len(predictions) == 2
-    assert len(updates) == 2
+    assert len(network1.update_sequence.prediction_steps) == 2
+    assert len(network1.update_sequence.update_steps) == 2
 
     # a standard continuous HGF
     network2 = (
@@ -77,15 +87,13 @@ def test_set_update_sequence():
         .add_nodes(volatility_children=1)
         .create_belief_propagation_fn()
     )
-    predictions, updates = network2.update_sequence
-    assert len(predictions) == 3
-    assert len(updates) == 4
+    assert len(network2.update_sequence.prediction_steps) == 3
+    assert len(network2.update_sequence.update_steps) == 4
 
     # an EF state node
     network3 = Network().add_nodes(kind="ef-state").create_belief_propagation_fn()
-    predictions, updates = network3.update_sequence
-    assert len(predictions) == 0
-    assert len(updates) == 1
+    assert len(network3.update_sequence.prediction_steps) == 0
+    assert len(network3.update_sequence.update_steps) == 1
 
     # a Dirichlet node
     network4 = (
@@ -100,9 +108,8 @@ def test_set_update_sequence():
         )
         .create_belief_propagation_fn()
     )
-    predictions, updates = network4.update_sequence
-    assert len(predictions) == 1
-    assert len(updates) == 3
+    assert len(network4.update_sequence.prediction_steps) == 1
+    assert len(network4.update_sequence.update_steps) == 3
 
 
 def test_add_parent():
@@ -162,7 +169,6 @@ def test_belief_propagation():
         edges=edges,
         input_idxs=(0, 1),
         observations="external",
-        action_fn=None,
     )
 
     # 2 - Generative -------------------------------------------------------------------
@@ -174,7 +180,6 @@ def test_belief_propagation():
         edges=edges,
         input_idxs=(0, 1),
         observations="generative",
-        action_fn=None,
     )
     assert jnp.isclose(new_attributes[0]["mean"], -0.20584226)
     assert jnp.isclose(new_attributes[1]["mean"], 1.0)
@@ -187,7 +192,6 @@ def test_belief_propagation():
         edges=edges,
         input_idxs=(0, 1),
         observations="deprived",
-        action_fn=None,
     )
     assert jnp.isclose(new_attributes[0]["mean"], 0.0)
     assert jnp.isclose(new_attributes[1]["mean"], 0.0)
@@ -201,12 +205,22 @@ def test_belief_propagation():
             edges=edges,
             input_idxs=(0, 1),
             observations="error",
-            action_fn=None,
         )
 
-    # with an action function
-    def action_fn(attributes, inputs):
+    # with a custom functions
+    def action_fn(node_idx, attributes, inputs):
         return attributes, inputs
+
+    def update_fn(node_idx, attributes, edges, **args):
+        return attributes
+
+    update_sequence = UpdateSequence(
+        prediction_steps=update_sequence.prediction_steps,
+        update_steps=update_sequence.update_steps,
+        pre_prediction_steps=((0, update_fn),),
+        post_update_steps=((0, update_fn),),
+        action_steps=((0, action_fn),),
+    )
 
     new_attributes, _ = beliefs_propagation(
         attributes=attributes,
@@ -215,7 +229,34 @@ def test_belief_propagation():
         edges=edges,
         input_idxs=(0, 1),
         observations="external",
-        action_fn=action_fn,
+    )
+
+
+def test_learning():
+    """Test the learning method for deep networks."""
+    # here x represents the visual input (River / No River)
+    x = np.array([1.0, 1.0])
+    x += np.random.normal(size=x.shape) / 100
+
+    # y represents the auditory and olfactory stimuli
+    y = np.array([[1.0, 1.0], [1.0, 0.0]]).T
+
+    network = (
+        Network(update_type="unbounded")
+        .add_nodes(n_nodes=2, precision=2.0, expected_precision=2.0)
+        .add_nodes(
+            value_children=[0, 1],
+            autoconnection_strength=0,
+            coupling_fn=(jnp.tanh, jnp.tanh),
+        )
+        .add_nodes(value_children=2, autoconnection_strength=0, coupling_fn=(jnp.tanh,))
+    )
+
+    network.train(
+        x=x,
+        y=y,
+        inputs_x_idxs=(3,),
+        inputs_y_idxs=(0, 1),
     )
 
 
@@ -245,4 +286,20 @@ def test_sample():
     assert isinstance(samples, dict), "Predictions should be a dictionary."
 
     # Iterate over each key-value pair in the predictions dictionary.
-    samples[0]["expected_mean"].shape[0] == n_predictions
+    assert samples[0]["expected_mean"].shape[0] == n_predictions
+
+
+def test_set_coupling():
+    """Test the set_coupling function."""
+    network = Network().add_nodes(n_nodes=3).add_nodes(value_children=[0, 1, 2])
+
+    attributes = set_coupling(
+        attributes=network.attributes,
+        edges=network.edges,
+        parent_idx=3,
+        child_idx=0,
+        coupling=0.5,
+    )
+
+    assert attributes[0]["value_coupling_parents"][0] == 0.5
+    assert attributes[3]["value_coupling_children"][0] == 0.5
