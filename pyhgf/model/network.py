@@ -1,5 +1,7 @@
 # Author: Nicolas Legrand <nicolas.legrand@cas.au.dk>
 
+from __future__ import annotations
+
 from typing import Callable, Optional, Union
 
 import jax.numpy as jnp
@@ -292,7 +294,7 @@ class Network:
             y = y[:, jnp.newaxis]
 
         # generate the belief propagation function
-        if (self.scan_fn is None) and overwrite:
+        if (self.scan_fn is None) or overwrite:
             self = self.create_learning_propagation_fn(
                 inputs_x_idxs=inputs_x_idxs, inputs_y_idxs=inputs_y_idxs, lr=lr
             )
@@ -777,9 +779,9 @@ class Network:
 
     def add_edges(
         self,
-        kind="value",
-        parent_idxs=Union[int, list[int]],
-        children_idxs=Union[int, list[int]],
+        parent_idxs: Union[int, list[int]],
+        children_idxs: Union[int, list[int]],
+        kind: str = "value",
         coupling_strengths: Union[float, list[float], tuple[float]] = 1.0,
         coupling_fn: tuple[Optional[Callable], ...] = (None,),
     ) -> "Network":
@@ -787,12 +789,12 @@ class Network:
 
         Parameters
         ----------
-        kind :
-            The kind of coupling, can be `"value"` or `"volatility"`.
         parent_idxs :
             The index(es) of the parent node(s).
         children_idxs :
             The index(es) of the children node(s).
+        kind :
+            The kind of coupling, can be `"value"` or `"volatility"`.
         coupling_strengths :
             The coupling strength betwen the parents and children.
         coupling_fn :
