@@ -71,6 +71,32 @@ Continuous nodes
 
     continuous_node_posterior_update
 
+Volatile nodes
+--------------
+
+.. currentmodule:: pyhgf.updates.posterior.volatile.posterior_update_value_level
+
+.. autosummary::
+   :toctree: generated/pyhgf.updates.posterior.volatile.posterior_update_value_level
+
+    posterior_update_precision_value_level
+    posterior_update_mean_value_level
+
+.. currentmodule:: pyhgf.updates.posterior.volatile.posterior_update_volatility_level
+
+.. autosummary::
+   :toctree: generated/pyhgf.updates.posterior.volatile.posterior_update_volatility_level
+
+    posterior_update_precision_volatility_level
+    posterior_update_mean_volatility_level
+
+.. currentmodule:: pyhgf.updates.posterior.volatile.volatile_node_posterior_update
+
+.. autosummary::
+   :toctree: generated/pyhgf.updates.posterior.volatile.volatile_node_posterior_update
+
+    volatile_node_posterior_update
+
 Exponential family
 ------------------
 
@@ -216,6 +242,7 @@ and creates a standard node structure for these models.
    HGF
    Network
    DeepNetwork
+   add_volatile_node
    add_continuous_state
    add_binary_state
    add_ef_state

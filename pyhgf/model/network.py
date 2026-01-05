@@ -18,6 +18,7 @@ from pyhgf.model import (
     add_continuous_state,
     add_dp_state,
     add_ef_state,
+    add_volatile_node,
     get_couplings,
 )
 from pyhgf.plots import graphviz, matplotlib, networkx
@@ -628,12 +629,13 @@ class Network:
             "categorical-state",
             "continuous-state",
             "binary-state",
+            "volatile-node",
         ]:
             raise ValueError(
                 (
                     "Invalid node type. Should be one of the following: "
                     "'dp-state', 'continuous-state', 'binary-state', "
-                    "'ef-state', or 'categorical-state'"
+                    "'ef-state', 'categorical-state', or 'volatile-node'"
                 )
             )
 
@@ -661,6 +663,18 @@ class Network:
                 additional_parameters=additional_parameters,
                 coupling_fn=coupling_fn,
             )
+
+        elif kind == "volatile-node":
+            self = add_volatile_node(
+                network=self,
+                n_nodes=n_nodes,
+                value_parents=value_parents,
+                value_children=value_children,
+                node_parameters=node_parameters,
+                additional_parameters=additional_parameters,
+                coupling_fn=coupling_fn,
+            )
+
         elif kind == "binary-state":
             self = add_binary_state(
                 network=self,
